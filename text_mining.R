@@ -40,11 +40,14 @@ list_to_dataframe <- function(l) {
     words <- c(words, names(category))
   words <- unique(words)
   out <- list(word = words)
-  for (category in names(l))
+  for (category in names(l)) {
     out[[category]] <- map_dbl(words,
                                ~ifelse(is.na(l[[category]][.x]),
                                        0,
                                        l[[category]][.x]))
+    out[[category]] <- out[[category]] / sum(out[[category]])
+    out[[category]][is.nan(out[[category]])] <- 0
+  }
   return(as.tibble(out))
 }
 
