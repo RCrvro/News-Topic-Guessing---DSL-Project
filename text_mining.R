@@ -9,7 +9,9 @@ db <- read_csv("news_preprocessed.csv")
 n <- nrow(db)
 
 ## TODO: cross validation
-db.train <- db[sample.int(n - 200, n/30), ]
+test.sample <- sample.int(n, n/3)
+db.train <- db[-test.sample, ]
+db.test <- db[test.sample, ]
 
 ## i possibili tipi di articolo, giusto per avere una costante
 categories <- unique(db$section)
@@ -31,22 +33,6 @@ get_matrix_words <- function(data, min_freq=2) {
   return(tdm.sums[which(tdm.sums >= min_freq)])
 }
 
-## i titoli di giornale divisi per categoria
-headlines <- map(categories, ~get_per_category(.x, "title"))
-names(headlines) <- categories
-
-## gli articoli divisi per categoria
-articles <- map(categories, ~get_per_category(.x, "content"))
-names(articles) <- categories
-
-## le matrici di ricorrenza delle parole, usate per allenare il modello
-matrix_per_headlines <- map(headlines, get_matrix_words)
-names(matrix_per_headlines) <- names(headlines)
-
-matrix_per_content <- map(articles, get_matrix_words)
-names(matrix_per_content) <- names(articles)
-
-
 ## al modello si passa una matrice, non una lista: questa funzione
 ## effettua la conversione (molto alla cazzo, ma funziona)
 list_to_dataframe <- function(l) {
@@ -64,15 +50,24 @@ list_to_dataframe <- function(l) {
   return(out)
 }
 
-## ed ecco le matrici
-headlines_matrix <- list_to_dataframe(matrix_per_headlines)
-content_matrix <- list_to_dataframe(matrix_per_content)
+## combina tutte le funzioni precedenti per ottenere i dati
+get_matrix <- function(var, data) {
+  txts <- map(categories, ~get_per_category(.x, var))
+  names(txts) <- categories
+  
+  matrix_per_var <- map(txts, get_matrix_words)
+  names(matrix_per_var) <- names(txts)
 
-## liberiamo un po' di memoria, che tm mangia RAM a colazione
-## matrix_per_headlines <- NULL
-## matrix_per_content <- NULL
-## articles <- NULL
-## headlines <- NULL
+  return(list_to_dataframe(matrix_per_var))
+}
+
+## ed ecco le matrici
+## headlines_matrix <- get_matrix("title", db.train)
+## content_matrix <- get_matrix("content", db.train)
+## son troppo pesanti per poter essere allocate normalmente: sono
+## richiamate più avanti in modo tale da evitare allocamenti inutili
+## in RAM (davvero, non credevo ne servisse così tanta)
+
 
 ## la probabilità a priori della distribuzione (uniforme)
 prior <- 1 / length(categories)
@@ -157,8 +152,8 @@ predict.vector <- function(predictor, v)
 
 
 ## costruiamo e alleniamo i predittori
-headlines.predictor <- predictor(prior, headlines_matrix)
-content.predictor <- predictor(prior, content_matrix)
+headlines.predictor <- predictor(prior, get_matrix("title", db.train))
+content.predictor <- predictor(prior, get_matrix("content", db.train))
 
 ## i dati per l'allenamento non servono più: togliamoli per liberare spazio
 ## headlines_matrix <- NULL
@@ -166,15 +161,14 @@ content.predictor <- predictor(prior, content_matrix)
 
 ## non è detto che i dati non si ripetano nel train, ma
 ## tendenzialmente non dovrebbe accadere (troppo)
-test.set <- db[sample.int(n, 200), ]
 
 ## parte per l'analisi delle prestazioni del classificatore, si può
 ## eliminare tranquillamente in futuro
 results.headline <- mean(predict.vector(headlines.predictor,
-                                        test.set$title)
+                                        db.test$title)
                          == test.set$section)
 results.content <- mean(predict.vector(content.predictor,
-                                       test.set$content)
+                                       db.test$content)
                         == test.set$section)
 results.headline
 results.content
@@ -206,16 +200,16 @@ prepare.dataset <- function(data,
 }
 
 ## prepara le matrici per l'algoritmo
-test.set2 <- prepare.dataset(test.set,
+test.set <- prepare.dataset(db.test,
+                            headlines.predictor,
+                            content.predictor)
+train.set <- prepare.dataset(db.train,
                              headlines.predictor,
                              content.predictor)
-train.set2 <- prepare.dataset(db.train,
-                              headlines.predictor,
-                              content.predictor)
 
 ## allena il modello
 model.rf <- train(section ~ publication + title + content,
-                  data = train.set2,
+                  data = train.set,
                   method = "rf",
                   na.action = na.omit)
 
@@ -226,8 +220,8 @@ model.rf <- train(section ~ publication + title + content,
 ##                   na.action = na.omit)
 
 ## mostra i risultati
-test.set2$results.rf <- predict(model.rf, newdata = test.set2)
+test.set2$results.rf <- predict(model.rf, newdata = test.set)
 # test.set2$results.j48 <- predict(model.j48, newdata = test.set2)
 ## questa è l'accuratezza *.*
-mean(test.set2$results.rf == test.set2$section)
+mean(test.set$results.rf == test.set$section)
 # mean(test.set2$results.j48 == test.set2$section)
