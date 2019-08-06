@@ -9,7 +9,7 @@ db <- read_csv("news_preprocessed.csv")
 n <- nrow(db)
 
 ## TODO: cross validation
-db.train <- db[sample.int(n, n/10), ]
+db.train <- db[sample.int(n - 200, n/30), ]
 
 ## i possibili tipi di articolo, giusto per avere una costante
 categories <- unique(db$section)
@@ -21,12 +21,13 @@ get_per_category <- function(category, var)
 ## restituisce la matrice della frequenza delle parole all'interno dei
 ## dati, escludendo le parole con frequenza < 2
 get_matrix_words <- function(data, min_freq=2) {
-  tdm <- TermDocumentMatrix(Corpus(VectorSource(data)),
-                            control = list(
-                              stopwords = TRUE,
-                              removePunctuation = TRUE,
-                              removeNumbers = TRUE))
-  tdm.sums <- rowSums(as.matrix(tdm))
+  tdm <- as.matrix(TermDocumentMatrix(Corpus(VectorSource(data)),
+                                      control = list(
+                                        stopwords = TRUE,
+                                        removePunctuation = TRUE,
+                                        removeNumbers = TRUE)))
+  tdm.sums <- c(tdm %*% rep(1, ncol(tdm)))
+  names(tdm.sums) <- rownames(tdm)
   return(tdm.sums[which(tdm.sums >= min_freq)])
 }
 
@@ -49,20 +50,18 @@ names(matrix_per_content) <- names(articles)
 ## al modello si passa una matrice, non una lista: questa funzione
 ## effettua la conversione (molto alla cazzo, ma funziona)
 list_to_dataframe <- function(l) {
-  words <- c()
-  for (category in l)
-    words <- c(words, names(category))
-  words <- unique(words)
-  out <- list(word = words)
-  for (category in names(l)) {
-    out[[category]] <- map_dbl(words,
-                               ~ifelse(is.na(l[[category]][.x]),
-                                       0,
-                                       l[[category]][.x]))
-    out[[category]] <- out[[category]] / sum(out[[category]])
-    out[[category]][is.nan(out[[category]])] <- 0
-  }
-  return(as.tibble(out))
+  words <- unique(names(flatten(l)))
+  out <- map_dfc(names(l), function(category) {
+    out.cat <- map_dbl(words, ~ifelse(is.na(l[[category]][.x]),
+                                      0,
+                                      l[[category]][.x]))
+    out.cat <- out.cat / sum(out.cat)
+  })
+  out <- as.matrix(out)
+  colnames(out) <- names(l)
+  rownames(out) <- words
+  out[is.nan(out)] <- 0
+  return(out)
 }
 
 ## ed ecco le matrici
@@ -70,50 +69,33 @@ headlines_matrix <- list_to_dataframe(matrix_per_headlines)
 content_matrix <- list_to_dataframe(matrix_per_content)
 
 ## liberiamo un po' di memoria, che tm mangia RAM a colazione
-matrix_per_headlines <- NULL
-matrix_per_content <- NULL
-articles <- NULL
-headlines <- NULL
+## matrix_per_headlines <- NULL
+## matrix_per_content <- NULL
+## articles <- NULL
+## headlines <- NULL
 
 ## la probabilità a priori della distribuzione (uniforme)
 prior <- 1 / length(categories)
 
 ## costruiamo il nostro bel modello (per una sola categoria)
-bayes.model <- function(prob, data.train, category, min_prob=1e-6) {
-  ## considera tutte le parole
-  words <- data.train$word
-  probs <- rep(prob, length(words))  # la priorità
-  names(probs) <- words
-
-  ## considera solamente la frequenza per la categoria (per
-  ## calcolare la probabiltià sul totale)
-  words.category <- data.train[, category, drop = TRUE]
-  names(words.category) <- words
-  
-  ## considera sul totale
-  words.total <- rowSums(data.train[, colnames(data.train) != "word"])
-  names(words.total) <- words
-
-  ## funzione di training: moltiplica la probabilità a priori per la
-  ## totale, più una costante (1e5) per evitare l'approssimazione a 0
-  train <- function(w)
-    probs[w] <<- 1e5 * probs[w] * (words.category[w] / words.total[w])
-
-  ## effettua il training
-  probs <- map_dbl(words, train)
+bayes.model <- function(prob, data.train, category, min_prob=1e-8) {
+  ## training: la probabilità è "deformata" in base alla probabilità
+  ## data dalle osservazioni, calcolata però con un calcolo matriciale
+  ## per risparmiare tempo
+  words <- names(data.train[data.train[, category] > 0, category])
+  probs <- c(1e5 * prior * (data.train[words, category] /
+                            data.train[words, ] %*% rep(1, ncol(data.train))))
   names(probs) <- words
 
   ## restituisce la funzione di previsione
   predict <- function(txt) {
     ## il testo è esploso
     txt.splitted <- strsplit(txt, " ")[[1]]
+    txt.selected <- txt.splitted[which(txt.splitted %in% words)]
     ## è effettuata la produttoria della probabilità per ogni parola
-    prod(map_dbl(txt.splitted,
-                 ~ifelse(probs[.x] == 0 || is.na(probs[.x]),
-                         min_prob,
-                         probs[.x])))
+    prod(probs[txt.selected]) *
+      min_prob * (length(txt.splitted) - length(txt.selected))
   }
-  return(predict)
 }
 
 ## costruisce il predittore 
@@ -125,7 +107,7 @@ predictor <- function(prior, data) {
   ## ritorna la funzione di previsione
   predict <- function(txt) {
     ## si verificano i risultati di ogni categoria
-    results <- map_dbl(predictor.categories, ~.x(txt))
+    results <- sapply(predictor.categories, function(fn) fn(txt))
     ## si normalizzano con somma = 1
     results <- results / sum(results)
     ## si eliminano i valori NaN (si sa mai) in caso di divisione per
@@ -171,7 +153,7 @@ predict.obs <- function(predictor, txt)
 
 ## come sopra, ma effettua in batch per un vettore
 predict.vector <- function(predictor, v)
-  map_chr(v, ~predict.obs(predictor, .x))
+  sapply(v, function(x) predict.obs(predictor, x))
 
 
 ## costruiamo e alleniamo i predittori
@@ -179,23 +161,23 @@ headlines.predictor <- predictor(prior, headlines_matrix)
 content.predictor <- predictor(prior, content_matrix)
 
 ## i dati per l'allenamento non servono più: togliamoli per liberare spazio
-headlines_matrix <- NULL
-content_matrix <- NULL
+## headlines_matrix <- NULL
+## content_matrix <- NULL
 
 ## non è detto che i dati non si ripetano nel train, ma
 ## tendenzialmente non dovrebbe accadere (troppo)
-test.set <- db[sample.int(n, 100), ]
+test.set <- db[sample.int(n, 200), ]
 
 ## parte per l'analisi delle prestazioni del classificatore, si può
 ## eliminare tranquillamente in futuro
-## results.headline <- mean(predict.vector(headlines.predictor,
-##                                         test.set$title)
-##                          == test.set$section)
-## results.content <- mean(predict.vector(content.predictor,
-##                                        test.set$title)
-##                         == test.set$section)
-## results.headline
-## results.content
+results.headline <- mean(predict.vector(headlines.predictor,
+                                        test.set$title)
+                         == test.set$section)
+results.content <- mean(predict.vector(content.predictor,
+                                       test.set$content)
+                        == test.set$section)
+results.headline
+results.content
 
 
 ## parte di Machine Learning puro
@@ -207,8 +189,8 @@ test.set <- db[sample.int(n, 100), ]
 ## ogni categoria e non solamente la categoria più probabile; ma il
 ## fatto è che già impiega una vita così, a gestire anche la matrice
 ## con tutto il suo peso avrebbe impiegato mooooooolto di più e senza
-## dare particolari risultati perché le probabilità tendono SEMPRE a 0
-## o 1.
+## dare particolari risultati perché le probabilità tendono quasi
+## sempre a 0 o 1 (si evita la maledizione della dimensionalità).
 ## Insomma, basta solamente mettere qualcosa per bilanciare titolo e
 ## contenuto e siamo a posto.
 prepare.dataset <- function(data,
