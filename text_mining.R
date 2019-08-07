@@ -9,6 +9,14 @@ db <- read_csv("news_preprocessed.csv")
 n <- nrow(db)
 
 ## TODO: cross validation
+
+## effettua un sample
+sample.prop <- 0.3
+db <- db[sample.int(n, sample.prop * n), ]
+n <- nrow(db)
+n
+
+## divide in train-set e test-set
 test.sample <- sample.int(n, n/3)
 db.train <- db[-test.sample, ]
 db.test <- db[test.sample, ]
@@ -62,8 +70,8 @@ get_matrix <- function(var, data) {
 }
 
 ## ed ecco le matrici
-## headlines_matrix <- get_matrix("title", db.train)
-## content_matrix <- get_matrix("content", db.train)
+##   headlines_matrix <- get_matrix("title", db.train)
+##   content_matrix <- get_matrix("content", db.train)
 ## son troppo pesanti per poter essere allocate normalmente: sono
 ## richiamate più avanti in modo tale da evitare allocamenti inutili
 ## in RAM (davvero, non credevo ne servisse così tanta)
@@ -73,23 +81,18 @@ get_matrix <- function(var, data) {
 prior <- 1 / length(categories)
 
 ## costruiamo il nostro bel modello (per una sola categoria)
-bayes.model <- function(prob, data.train, category, min_prob=1e-8) {
+bayes.model <- function(prob, data.train, category, min_prob=1e-20) {
   ## training: la probabilità è "deformata" in base alla probabilità
   ## data dalle osservazioni, calcolata però con un calcolo matriciale
   ## per risparmiare tempo
   words <- names(data.train[data.train[, category] > 0, category])
-  probs <- c(1e5 * prior * (data.train[words, category] /
-                            data.train[words, ] %*% rep(1, ncol(data.train))))
+  probs <- c(prior * (data.train[words, category] /
+                      data.train[words, ] %*% rep(1, ncol(data.train))))
   names(probs) <- words
 
   ## restituisce la funzione di previsione
-  predict <- function(txt) {
-    ## il testo è esploso
-    txt.splitted <- strsplit(txt, " ")[[1]]
-    txt.selected <- txt.splitted[which(txt.splitted %in% words)]
-    ## è effettuata la produttoria della probabilità per ogni parola
-    prod(probs[txt.selected]) *
-      min_prob * (length(txt.splitted) - length(txt.selected))
+  predict <- function(w) {
+    ifelse(probs[w] == 0 || is.na(probs[w]), min_prob, probs[w])
   }
 }
 
@@ -101,17 +104,16 @@ predictor <- function(prior, data) {
   names(predictor.categories) <- categories
   ## ritorna la funzione di previsione
   predict <- function(txt) {
-    ## si verificano i risultati di ogni categoria
-    results <- sapply(predictor.categories, function(fn) fn(txt))
-    ## si normalizzano con somma = 1
-    results <- results / sum(results)
-    ## si eliminano i valori NaN (si sa mai) in caso di divisione per
-    ## 0, che avviene quando le probabilità sono particolarmente
-    ## basse... paradossalmente sarebbe il caso in cui l'algoritmo
-    ## presta meglio, perché ha più dati a disposizione, però per non
-    ## si sa bene quale ragione fa così (= a furia di moltiplicare per
-    ## valori < 1 p -> 0)
-    results[is.nan(results)] <- 0
+    ## il testo è esploso
+    txt.splitted <- strsplit(txt, " ")[[1]]
+    results <- rep(prior, length(predictor.categories))
+    names(results) <- names(predictor.categories)
+    for (word in txt.splitted) {
+      results.new <- sapply(predictor.categories, function(fn) fn(word))
+      results <- results * results.new
+      results <- results / sum(results)
+      if (any(results == 1)) return(results)
+    }
     return(results)
   }
 }
@@ -155,21 +157,14 @@ predict.vector <- function(predictor, v)
 headlines.predictor <- predictor(prior, get_matrix("title", db.train))
 content.predictor <- predictor(prior, get_matrix("content", db.train))
 
-## i dati per l'allenamento non servono più: togliamoli per liberare spazio
-## headlines_matrix <- NULL
-## content_matrix <- NULL
-
-## non è detto che i dati non si ripetano nel train, ma
-## tendenzialmente non dovrebbe accadere (troppo)
-
 ## parte per l'analisi delle prestazioni del classificatore, si può
 ## eliminare tranquillamente in futuro
 results.headline <- mean(predict.vector(headlines.predictor,
                                         db.test$title)
-                         == test.set$section)
+                         == db.test$section)
 results.content <- mean(predict.vector(content.predictor,
                                        db.test$content)
-                        == test.set$section)
+                        == db.test$section)
 results.headline
 results.content
 
@@ -203,9 +198,14 @@ prepare.dataset <- function(data,
 test.set <- prepare.dataset(db.test,
                             headlines.predictor,
                             content.predictor)
+write.csv(test.set,
+          file = "testset.csv")
+
 train.set <- prepare.dataset(db.train,
                              headlines.predictor,
                              content.predictor)
+write.csv(train.set,
+          file = "trainset.csv")
 
 ## allena il modello
 model.rf <- train(section ~ publication + title + content,
@@ -220,8 +220,10 @@ model.rf <- train(section ~ publication + title + content,
 ##                   na.action = na.omit)
 
 ## mostra i risultati
-test.set2$results.rf <- predict(model.rf, newdata = test.set)
+test.set$results.rf <- predict(model.rf, newdata = test.set)
 # test.set2$results.j48 <- predict(model.j48, newdata = test.set2)
 ## questa è l'accuratezza *.*
 mean(test.set$results.rf == test.set$section)
 # mean(test.set2$results.j48 == test.set2$section)
+
+save.image(file = "completed.RData")
