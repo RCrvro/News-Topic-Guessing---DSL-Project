@@ -175,34 +175,83 @@ model.rf <- train(section ~ publication + title + content,
                   method = "rf",
                   na.action = na.omit)
 
-## Modello J48
-install.packages("RWeka",type = "source")
-library(RWeka)
-install.packages("rJava",type = "source")
-library(rJava)
-model.j48 <- train(section ~ publication + title + content,
+## Modello C5.0 (84.74166%)
+model.c <- train(section ~ publication + title + content,
                   data = train.set,
-                  method = "J48",
+                  method = "C5.0",
                   na.action = na.omit)
 
-## Modello SVM
+## Modello SVM (84.41334%)
 ## http://www.cs.cornell.edu/people/tj/publications/joachims_98a.pdf
 ## https://www.hvitfeldt.me/blog/binary-text-classification-with-tidytext-and-caret/#svm
-# È un SVM lineare regolarizzato con classi pesate 
+# È un SVM lineare per classificazione multiclasse 
 model.svm <- train(section ~ publication + title + content,
                    data = train.set,
-                   method = "svmLinearWeights2",
+                   method = "svmLinear3",
+                   na.action = na.omit)
+
+## Modello Logistic Boost (86.11929%)
+model.lb <- train(section ~ publication + title + content,
+                   data = train.set,
+                   method = "LogitBoost",
                    na.action = na.omit)
 
 ## mostra i risultati
-test.set$results.rf <- predict(model.rf, newdata = test.set)
-test.set$results.j48 <- predict(model.j48, newdata = test.set)
-test.set$results.svm <- predict(model.svm, newdata = test.set)
 test.set$results.rpart <- predict(model.rpart, newdata = test.set)
+test.set$results.rf <- predict(model.rf, newdata = test.set)
+test.set$results.c <- predict(model.c, newdata = test.set)
+test.set$results.svm <- predict(model.svm, newdata = test.set)
+test.set$results.lb <- predict(model.lb, newdata = test.set)
 ## Calcolo dell'accuratezza
+mean(test.set$results.rpart == test.set$section)
 mean(test.set$results.rf == test.set$section)
-mean(test.set$results.j48 == test.set$section)
-mean(test.set$results.rpart == test.set$section)
-mean(test.set$results.rpart == test.set$section)
+mean(test.set$results.c == test.set$section)
+mean(test.set$results.svm == test.set$section)
+mean(test.set$results.lb == test.set$section,na.rm=TRUE)
 
-save.image(file = "/Users/riccardocervero/Desktop/p.RData")
+##Cross Validation con resampling stratificato
+cv <- function(db,iter=3,method) {
+  i=1
+  while (i<iter+1) {
+    split_data <- function(db,SplitRatio=0.7) {
+      db$split = caTools::sample.split(db$section,SplitRatio = SplitRatio)
+      train=subset(db, db$split==TRUE)
+      test=subset(db, db$split==FALSE)
+      #Shuffle
+      db.train <- train[sample(nrow(train),replace = F),]
+      db.test <- test[sample(nrow(test),replace = F),]
+      return(list(db.train=db.train,
+                  db.test=db.test))
+    }
+    spl_data <- split_data(db)
+    VAR <- c('title','content','publication','section','category')
+    db.train <- spl_data$db.train[,VAR]
+    db.test <- spl_data$db.test[,VAR]
+    #Addestra il modello
+    headlines.predictor <- predictor(prior, get_matrix("title", db.train))
+    content.predictor <- predictor(prior, get_matrix("content", db.train))
+    ##Prepara le matrici per l'algoritmo
+    test.set <- prepare.dataset(db.test,headlines.predictor,content.predictor)
+    train.set <- prepare.dataset(db.train,headlines.predictor,content.predictor)
+    ##Addestra il modello di ML
+    model <- train(section ~ publication + title + content,
+                   data = train.set,
+                   method = method,
+                   na.action = na.omit)
+    ##Calcola il risultato
+    test.set$results.model <- predict(model, newdata = test.set,drop.unused.levels = TRUE)
+    res <- vector()
+    res[i] = mean(test.set$results.model == test.set$section,na.rm=TRUE)
+    print("Completed iteration")
+    i=i+1
+  }
+  return(list(accuracy=mean(res,na.rm=TRUE)))
+}
+
+rpart = cv(db,method = "rpart")
+rf = cv(db,method = "rf")
+c05 = cv(db=db,method = "C5.0")
+svm = cv(db=db,method = "svmLinear3")
+lb = cv(db=db,method = "LogitBoost")
+
+save.image(file = "/Users/riccardocervero/Desktop/completed.RData")
