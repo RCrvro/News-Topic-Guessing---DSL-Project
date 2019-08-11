@@ -247,9 +247,11 @@ cv <- function(db,iter=3,method) {
 rpart = cv(db,method = "rpart")
 ## Il risultato medio è 61.34793%, contro un 73.92431% ottenuto con doppia stratificazione.
 rf = cv(db,method = "rf")
+## Il risultato medio è 72.92627%, contro un 84.82806% ottenuto con doppia stratificazione.
 c05 = cv(db,method = "C5.0")
 ## Il risultato medio è 72.90707%, contro un 84.74166% ottenuto con doppia stratificazione.
 svm = cv(db,method = "svmLinear3")
+## Il risultato medio è 73.00307%, contro un 84.41334% ottenuto con doppia stratificazione.
 lb = cv(db,method = "LogitBoost")
 ## Il risultato medio è 76.94287%, contro un 86.11929% ottenuto con doppia stratificazione,
 ## miglior risultato.
