@@ -383,17 +383,18 @@ rpart = cv(db,method = "rpart")
 ## Il risultato medio è 61.34793%, contro un 73.92431% ottenuto con doppia stratificazione.
 
 rf = cv(db,method = "rf")
-
+## Il risultato medio è 72.92627%, contro un 84.82806% ottenuto con doppia stratificazione.
 c05 = cv(db,method = "C5.0")
 ## Il risultato medio è 72.90707%, contro un 84.74166% ottenuto con doppia stratificazione.
 svm = cv(db,method = "svmLinear3")
+## Il risultato medio è 73.00307%, contro un 84.41334% ottenuto con doppia stratificazione.
 lb = cv(db,method = "LogitBoost")
 ## Il risultato medio è 76.94287%, contro un 86.11929% ottenuto con doppia stratificazione,
 ## miglior risultato.
 
-         
-         
-## Analisi della Confusion Matrix
+                 
+## Analisi della Confusion Matrix del modello "Logitistic Boost"
+
 cm <- data.frame(confusionMatrix.train(model.lb,norm = "none")[['table']])
 cm_lb <- cm[cm$Prediction!=cm$Reference,]
 cm_lb <- cm_lb[order(-cm_lb$Freq),]
@@ -404,12 +405,7 @@ err1 <- cm_lb[(cm_lb$Prediction=='news' & cm_lb$Reference=='law & politics'),'Fr
              cm_lb[(cm_lb$Prediction=='law & politics' & cm_lb$Reference=='news'),'Freq']
 ##In 1014 casi, il modello ha scambiato le due categorie.
 
-## 2) Conta le volte in cui crime e law & politics sono state scambiate
-err2 <- cm_lb[(cm_lb$Prediction=='crime' & cm_lb$Reference=='law & politics'),'Freq']+
-  cm_lb[(cm_lb$Prediction=='law & politics' & cm_lb$Reference=='crime'),'Freq']
-##In 9 casi, il modello ha scambiato le due categorie.
-
-## 3) Conta le volte in cui crime e news sono state scambiate
+## 2) Conta le volte in cui crime e news sono state scambiate
 err3 <- cm_lb[(cm_lb$Prediction=='crime' & cm_lb$Reference=='news'),'Freq']+
   cm_lb[(cm_lb$Prediction=='news' & cm_lb$Reference=='crime'),'Freq']
 ##In 14 casi, il modello ha scambiato le due categorie.
@@ -425,12 +421,47 @@ err5 <- cm_lb[(cm_lb$Prediction=='economy, business & jobs' & cm_lb$Reference=='
 ##In 4 casi, il modello ha scambiato le due categorie.
 
 #Calcola il numero di errori di minor gravità:
-err <- (err1+err2+err3+err4+err5)
+err <- (err1+err3+err4+err5)
 err_perc <- err/sum(cm$Freq)
 ## C'è un 3% di errori che potrebbero non essere considerati come tali,
 ## poichè anche all'occhio umano sarebbe difficile distinguere perfettamente le due categorie.
 tot <- sum(cm$Freq)-err
 true_accuracy <- sum(cm[cm$Prediction==cm$Reference,'Freq'])/tot
-## Depurando l'accuratezza da questi errori, si ottiene un'accuratezza del 93.04428%. 
+## Depurando l'accuratezza da questi errori, si ottiene un'accuratezza del 91.41277%.
+
+## Analisi della Confusion Matrix del modello "SVM"
+
+cm <- data.frame(confusionMatrix.train(model.svm,norm = "none")[['table']])
+cm_svm <- cm[cm$Prediction!=cm$Reference,]
+cm_svm <- cm_svm[order(-cm_svm$Freq),]
+View(cm_svm)
+
+## 1) Conta le volte in cui news e law & politics sono state scambiate
+err1 <- cm_svm[(cm_lb$Prediction=='news' & cm_svm$Reference=='law & politics'),'Freq']+
+  cm_svm[(cm_svm$Prediction=='law & politics' & cm_svm$Reference=='news'),'Freq']
+##In 1384 casi, il modello ha scambiato le due categorie.
+
+## 2) Conta le volte in cui crime e news sono state scambiate
+err3 <- cm_svm[(cm_svm$Prediction=='crime' & cm_svm$Reference=='news'),'Freq']+
+  cm_svm[(cm_svm$Prediction=='news' & cm_svm$Reference=='crime'),'Freq']
+##In 18 casi, il modello ha scambiato le due categorie.
+
+## 4) Conta le volte in cui food e health & lifestyle sono state scambiate
+err4 <- cm_svm[(cm_svm$Prediction=='food' & cm_svm$Reference=='health & lifestyle'),'Freq']+
+  cm_svm[(cm_svm$Prediction=='health & lifestyle' & cm_svm$Reference=='food'),'Freq']
+##In 15 casi, il modello ha scambiato le due categorie.
+
+## 5) Conta le volte in cui law & politics e economy, business & jobs sono state scambiate
+err5 <- cm_svm[(cm_svm$Prediction=='economy, business & jobs' & cm_svm$Reference=='law & politics'),'Freq']+
+  cm_svm[(cm_svm$Prediction=='law & politics' & cm_svm$Reference=='economy, business & jobs'),'Freq']
+##In 26 casi, il modello ha scambiato le due categorie.
+
+err <- (err1+err3+err4+err5)
+err_perc <- err/sum(cm$Freq)
+## C'è un 4% di errori che potrebbero non essere considerati come tali,
+## poichè anche all'occhio umano sarebbe difficile distinguere perfettamente le due categorie.
+tot <- sum(cm$Freq)-err
+true_accuracy <- sum(cm[cm$Prediction==cm$Reference,'Freq'])/tot
+## Depurando l'accuratezza da questi errori, si ottiene un'accuratezza del 92.435%.
   
 save.image(file = "/Users/riccardocervero/Desktop/completed.RData")
