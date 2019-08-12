@@ -6,8 +6,8 @@ library(tibble)
 library(dplyr)
 
 ## Sampling con doppia stratificazione (in base a 'section' e 'publication')
-db <- read.csv("/Users/riccardocervero/Desktop/news_sample.csv")
-db.train <- read.csv("/Users/riccardocervero/Desktop/train1.csv")
+db <- read.csv("news_sample.csv")
+db.train <- read.csv("train1.csv")
 db.test <- anti_join(db,db.train)
 VAR <- c('title','content','publication','section','category')
 db <- db[,VAR]
@@ -18,12 +18,14 @@ n <- nrow(db)
 db.train <- db.train[sample(nrow(db.train),replace = F),]
 db.test <- db.test[sample(nrow(db.test),replace = F),]
 dim(db.train)
+
 View(db)
 View(db.train)
 ## Filtra il dataset in base alla categoria
+
 categories <- unique(db$section)
-get_per_category <- function(category, var)
-  db.train[db.train$section == category, var, drop = TRUE]
+get_per_category <- function(data, category, var)
+  data[data$section == category, var, drop = TRUE]
 ## Restituisce la matrice della frequenza delle parole all'interno dei
 ## dati, escludendo le parole con frequenza < 2
 get_matrix_words <- function(data, min_freq=2) {
@@ -54,7 +56,7 @@ list_to_dataframe <- function(l) {
 ## Combinazione di tutte le funzioni precedenti per ottenere i dati
 ## su cui allenare i modelli
 get_matrix <- function(var, data) {
-  txts <- map(categories, ~get_per_category(.x, var))
+  txts <- map(categories, ~get_per_category(data, .x, var))
   names(txts) <- categories
   
   matrix_per_var <- map(txts, get_matrix_words)
@@ -103,6 +105,93 @@ predictor <- function(prior, data) {
     return(results)
   }
 }
+
+predictor.tracked <- function(prior, data) {
+  ## Costruisce un modello per ogni categoria usando gli stessi dati
+  predictor.categories <- map(categories,
+                              ~bayes.model(prior, data, .x))
+  names(predictor.categories) <- categories
+  ## Restituisce la funzione di previsione
+  predict <- function(txt) {
+    ## Il testo viene esploso
+    txt.splitted <- strsplit(as.character(txt), " ")[[1]]
+    results <- rep(prior, length(predictor.categories))
+    names(results) <- names(predictor.categories)
+    results.matrix <- tibble(probs = results,
+                             category = names(results),
+                             iteration = 0,
+                             word = "")
+    iteration <- 0
+    for (word in txt.splitted) {
+      iteration <- iteration + 1
+      results.new <- sapply(predictor.categories, function(fn) fn(word))
+      results <- results * results.new
+      results <- results / sum(results)
+      results.matrix <- results.matrix %>%
+        add_row(probs = results,
+                category = names(results),
+                iteration = iteration,
+                word = word)
+      ## results.matrix <- rbind(results.matrix, results)
+    }
+    ## colnames(results.matrix) <- names(results)
+    ## results.matrix <- results.matrix %>%
+    ##   add_column(index = 0:length(txt.splitted),
+    ##              word_index = c("", txt.splitted))
+    return(results.matrix)
+  }
+}
+predictor.tracked.headlines <- predictor.tracked(prior,
+                                                 get_matrix("title", db.train))
+
+## titoli scelti a mano
+probs1 <-  predictor.tracked.headlines("disney have trouble find new ceo")
+probs2 <- predictor.tracked.headlines("moon lunar eclipse comet evening happen tonight")
+probs3 <- predictor.tracked.headlines("win oscar pool blisteringly accurate prediction")
+
+
+library(gganimate)
+library(ggstance)
+
+plot_animation <- function(data, outfile) {
+  first_cat <- data[1, "category", drop = T]
+  words <- data[which(data$category == first_cat), "word", drop = T]
+  words.vec <- c("")
+  for (i in 2:length(words))
+    words.vec <- c(words.vec, paste(words[2:i],
+                                    collapse = " "))
+  data$word <- rep(words.vec, each = length(categories))
+  title <- words.vec[length(words.vec)]
+  ggplot(data, aes(x = factor(category),
+                   y = probs,
+                   fill = category)) +
+    geom_bar(stat = "Identity",
+             position = "identity",
+             aes(fill = category)) +
+    ylim(0, 1) +
+    labs(title = "{closest_state}",
+         x = "",
+         y = "Probability") +
+    coord_flip() +
+    theme(legend.position = "none") +
+    transition_states(word,
+                      transition_length = 0.5,
+                      state_length = 0) +
+    enter_fade() +
+    exit_shrink() +
+    ease_aes("quadratic-in-out") %>%
+  animate(height = 1000, width = 1000) +
+    anim_save(outfile)
+}
+
+plot_animation(probs1, "/home/fede/grafico1.gif")
+
+plot_animation(probs2, "/home/fede/grafico2.gif")
+
+plot_animation(probs3, "/home/fede/grafico3.gif")
+
+
+
 ## Ogni closure rimane isolata dalle altre: ogni predittore
 ## per tipo (titolo o contenuto) usa dei predittori per singola
 ## categoria (i tipi di articolo) isolati tra di loro
@@ -208,6 +297,8 @@ mean(test.set$results.lb == test.set$section,na.rm=TRUE)
 ## 3-Cross Validation con resampling stratificato in base alla sola variabile target 'section'
 cv <- function(db,iter=3,method) {
   i=1
+
+  
   while (i<iter+1) {
     split_data <- function(db,SplitRatio=0.7) {
       db$split = caTools::sample.split(db$section,SplitRatio = SplitRatio)
@@ -241,12 +332,58 @@ cv <- function(db,iter=3,method) {
     print("Completed iteration")
     i=i+1
   }
+
+  
   return(list(accuracy=mean(res,na.rm=TRUE)))
 }
 
+cross_validation <- function(data, model) {
+  third <- nrow(data) / 3
+  accuracy <- c()
+  num_sample <- c()
+  for (t in c(third * 1:3)) {
+    sample <- seq(t, t + third - 1)
+    num_sample <- c(num_sample, length(sample))
+    print("sample done")
+    headlines.predictor <- predictor(prior,
+                                     get_matrix("title", db[-sample]))
+    print("headlines predictor done")
+    content.predictor <- predictor(prior,
+                                   get_matrix("content", db[-sample]))
+    print("contents predictor done")
+    train.set <- prepare.dataset(data[-sample, ],
+                                headlines.predictor,
+                                content.predictor)
+    print("train set done")
+    test.set <- prepare.dataset(data[sample, ],
+                                headlines.predictor,
+                                content.predictor)
+    print("test set done")
+    train(section ~ publication + title + content,
+          data = train.set,
+          method = model,
+          na.action = na.omit) -> model
+    print("model done")
+    accuracy <- c(accuracy, mean(predict(model,
+                                         newdata = test.set,
+                                         drop.unused.levels = TRUE)
+                                 == test.set$section,
+                                 na.rm = TRUE), accuracy)
+    print(num_sample)
+    print(accuracy)
+  }
+  return(weighted.mean(accuracy, num_sample))
+}
+
+random_forest <- cross_validation(db, "rf")
+cross_validation(db, "svmLinear3")
+
+
 rpart = cv(db,method = "rpart")
 ## Il risultato medio è 61.34793%, contro un 73.92431% ottenuto con doppia stratificazione.
+
 rf = cv(db,method = "rf")
+
 c05 = cv(db,method = "C5.0")
 ## Il risultato medio è 72.90707%, contro un 84.74166% ottenuto con doppia stratificazione.
 svm = cv(db,method = "svmLinear3")
