@@ -5,24 +5,7 @@ library(purrr)
 library(tibble)
 library(dplyr)
 
-## Sampling con doppia stratificazione (in base a 'section' e 'publication')
-db <- read.csv("news_sample.csv")
-db.train <- read.csv("train1.csv")
-db.test <- anti_join(db,db.train)
-VAR <- c('title','content','publication','section','category')
-db <- db[,VAR]
-db.train <- db.train[,VAR]
-db.test <- db.test[,VAR]
-n <- nrow(db)
-## Shuffle delle righe
-db.train <- db.train[sample(nrow(db.train),replace = F),]
-db.test <- db.test[sample(nrow(db.test),replace = F),]
-dim(db.train)
-
-View(db)
-View(db.train)
 ## Filtra il dataset in base alla categoria
-
 categories <- unique(db$section)
 get_per_category <- function(data, category, var)
   data[data$section == category, var, drop = TRUE]
@@ -204,9 +187,6 @@ predict.obs <- function(predictor, txt)
 predict.vector <- function(predictor, v)
   sapply(v, function(x) predict.obs(predictor, x))
 
-## Costruiamo e alleniamo i predittori
-headlines.predictor <- predictor(prior, get_matrix("title", db.train))
-content.predictor <- predictor(prior, get_matrix("content", db.train))
 
 ## Analisi delle prestazioni del classificatore
 results.headline <- mean(predict.vector(headlines.predictor,
@@ -236,69 +216,11 @@ prepare.dataset <- function(data,
          content = predict.vector(predictor.contents,
                                   as.character(data$content)))
 }
-## Prepara le matrici per l'algoritmo
-test.set <- prepare.dataset(db.test,
-                            headlines.predictor,
-                            content.predictor)
-write.csv(test.set,
-          file = "/Users/riccardocervero/Desktop/testset.csv")
 
-train.set <- prepare.dataset(db.train,
-                             headlines.predictor,
-                             content.predictor)
-write.csv(train.set,
-          file = "/Users/riccardocervero/Desktop/trainset.csv")
-
-## Modello Recurive Partitioning, modello ricorsivo ad albero decisionale 
-##che ha un maggior rischio di overfitting rispetto a RF (73.92431%)
-model.rpart <- train(section ~ publication + title + content,
-                  data = train.set,
-                  method = "rpart",
-                  na.action = na.omit)
-
-## Modello Random Forest (84.82806%)
-model.rf <- train(section ~ publication + title + content,
-                  data = train.set,
-                  method = "rf",
-                  na.action = na.omit)
-
-## Modello C5.0 (84.74166%)
-model.c <- train(section ~ publication + title + content,
-                  data = train.set,
-                  method = "C5.0",
-                  na.action = na.omit)
-
-## Modello SVM lineare per classificazione multiclasse (84.41334%)
-## http://www.cs.cornell.edu/people/tj/publications/joachims_98a.pdf
-model.svm <- train(section ~ publication + title + content,
-                   data = train.set,
-                   method = "svmLinear3",
-                   na.action = na.omit)
-
-## Modello Logistic Boost (86.11929%)
-model.lb <- train(section ~ publication + title + content,
-                   data = train.set,
-                   method = "LogitBoost",
-                   na.action = na.omit)
-
-## Estrazione dei risultati
-test.set$results.rpart <- predict(model.rpart, newdata = test.set)
-test.set$results.rf <- predict(model.rf, newdata = test.set)
-test.set$results.c <- predict(model.c, newdata = test.set)
-test.set$results.svm <- predict(model.svm, newdata = test.set)
-test.set$results.lb <- predict(model.lb, newdata = test.set)
-## Calcolo dell'accuratezza
-mean(test.set$results.rpart == test.set$section)
-mean(test.set$results.rf == test.set$section)
-mean(test.set$results.c == test.set$section)
-mean(test.set$results.svm == test.set$section)
-mean(test.set$results.lb == test.set$section,na.rm=TRUE)
 
 ## 3-Cross Validation con resampling stratificato in base alla sola variabile target 'section'
 cv <- function(db,iter=3,method) {
   i=1
-
-  
   while (i<iter+1) {
     split_data <- function(db,SplitRatio=0.7) {
       db$split = caTools::sample.split(db$section,SplitRatio = SplitRatio)
@@ -320,7 +242,7 @@ cv <- function(db,iter=3,method) {
     ##Prepara le matrici per l'algoritmo
     test.set <- prepare.dataset(db.test,headlines.predictor,content.predictor)
     train.set <- prepare.dataset(db.train,headlines.predictor,content.predictor)
-    ##Addestra il modello di ML
+    ##Costruisce e addestra il modello di ML
     model <- train(section ~ publication + title + content,
                    data = train.set,
                    method = method,
@@ -332,12 +254,142 @@ cv <- function(db,iter=3,method) {
     print("Completed iteration")
     i=i+1
   }
-
-  
   return(list(accuracy=mean(res,na.rm=TRUE)))
 }
 
-cross_validation <- function(data, model) {
+## Modello Recurive Partitioning, modello ricorsivo ad albero decisionale 
+rpart = cv(db,method = "rpart")
+## Il risultato medio è 61.34793%.
+
+
+## Modello Random Forest
+rf = cv(db,method = "rf")
+## Il risultato medio è 72.92627%.
+         
+## Modello C5.0
+c05 = cv(db,method = "C5.0")
+## Il risultato medio è 72.90707%.
+         
+
+## Modello SVM lineare per classificazione multiclasse
+svm = cv(db,method = "svmLinear3")
+## Il risultato medio è 73.00307%.
+         
+
+## Modello Logistic Boost
+lb = cv(db,method = "LogitBoost")
+## Il risultato medio è 76.94287%, miglior risultato.
+
+                 
+## 3-Cross Validation con doppia stratificazione (in base a 'section' e 'publication')
+db <- read.csv("news_sample.csv")
+# Funzione di depurazione dell'accuratezza
+depurate <- function(model) {
+  cm_ <- data.frame(confusionMatrix.train(model,norm = "none")[['table']])
+  cm <- cm_[cm_$Prediction!=cm$Reference,]
+  cm <- cm[order(-cm$Freq),]
+  err1 <- cm[(cm$Prediction=='news' & cm$Reference=='law & politics'),'Freq']+
+    cm[(cm$Prediction=='law & politics' & cm$Reference=='news'),'Freq']
+  err3 <- cm[(cm$Prediction=='crime' & cm$Reference=='news'),'Freq']+
+    cm[(cm$Prediction=='news' & cm$Reference=='crime'),'Freq']
+  err4 <- cm[(cm$Prediction=='food' & cm$Reference=='health & lifestyle'),'Freq']+
+    cm[(cm$Prediction=='health & lifestyle' & cm$Reference=='food'),'Freq']
+  err5 <- cm[(cm$Prediction=='economy, business & jobs' & cm$Reference=='law & politics'),'Freq']+
+    cm[(cm$Prediction=='law & politics' & cm$Reference=='economy, business & jobs'),'Freq']
+  err <- (err1+err3+err4+err5)
+  err_perc <- err/sum(cm_$Freq)
+  tot <- sum(cm_$Freq)-err
+  true_accuracy <- sum(cm_[cm_$Prediction==cm_$Reference,'Freq'])/tot
+  return(list(err1=err1,
+              err2=err2,
+              err3=err3,
+              err4=err4,
+              err5=err5,
+              true_accuracy=true_accuracy))
+}
+
+# Funzione che effettua la 3-fold Cross Validation e calcola l'accuratezza depurata
+cv_double <- function(db,iter=3,method) {
+  res <- vector()
+  ta <- vector()
+  i=1
+  while (i<iter+1) {
+    train <- splitstackshape::stratified(db,c("section","publication"),size = 0.7)
+    test <- anti_join(db,train)
+    db.train <- as_tibble(train[sample(nrow(train),replace = F),])
+    db.test <- test[sample(nrow(test),replace = F),]
+    #Addestra il modello
+    headlines.predictor <- predictor(prior, get_matrix("title", db.train))
+    content.predictor <- predictor(prior, get_matrix("content", db.train))
+    ##Prepara le matrici per l'algoritmo
+    test.set <- prepare.dataset(db.test,headlines.predictor,content.predictor)
+    train.set <- prepare.dataset(db.train,headlines.predictor,content.predictor)
+    ##Addestra il modello di ML
+    model <- train(section ~ publication + title + content,
+                   data = train.set,
+                   method = method,
+                   na.action = na.omit)
+    ##Calcola il risultato
+    test.set$results.model <- predict(model, newdata = test.set,drop.unused.levels = TRUE)
+    res[i] = mean(test.set$results.model == test.set$section,na.rm=TRUE)
+    ta[i]= depurate(model = model)$true_accuracy
+    print("Completed iteration")
+    i=i+1
+  }
+  return(list(accuracy=mean(res,na.rm=TRUE),
+              true_accuracy=mean(ta,na.rm=TRUE)))
+}
+
+## Risultati:
+
+#Recursive Paritioning:
+rpart_double = cv_double(db,method = "rpart")
+#Singola: 0.6134793
+#Doppia: 0.6532038
+#Depurata: 0.8564617
+rpart<-c(0.6134793,0.6532038,0.8564617)
+
+#Random Forest:
+rf_double = cv_double(db,method = "rf")
+#Singola: 0.7292627
+#Doppia: 0.7741296
+#Depurata: 0.9235851
+rf<-c(0.7292627,0.7741296,0.9235851)
+
+#C.05
+c05_double = cv_double(db=db,method = "C5.0")
+#Singola: 0.7290707
+#Doppia: 0.7772938
+#Depurata: 0.9211711
+c05<-c(0.7290707,0.7772938,0.9211711)
+
+#Support Vector Machine
+svm_double = cv_double(db=db,method = "svmLinear3")
+#Singola: 0.7300307
+#Doppia: 0.7614315
+#Depurata: 0.9237299
+svm<-c(0.7300307,0.7614315,0.9237299)
+
+#Logistic Boost
+lb_double = cv_double(db=db,method = "LogitBoost")
+#Singola: 0.7694287
+#Doppia: 0.8116422
+#Depurata: 0.9287011
+lb<-c(0.7694287,0.8116422,0.9287011)
+
+#Rappresentazione dei risultati
+r <- read.csv("/Users/riccardocervero/Desktop/result.csv")
+TI <- as.factor(TI)
+ggplot(r,aes(r$M,r$V,fill=r$TI))+
+  geom_bar(position="dodge",stat="identity")+
+  labs(title = "Confronto fra risultati per modello",
+       x= "Modello",
+       y="Accuratezza") +
+  scale_fill_discrete(name="Tipo di accuratezza")+
+  scale_y_continuous(breaks = seq(0, 1, 0.05))
+         
+  #Altra funzione di Cross Validation (versione di Fede)
+  cross_validation <- function(data, model) {
   third <- nrow(data) / 3
   accuracy <- c()
   num_sample <- c()
@@ -374,94 +426,5 @@ cross_validation <- function(data, model) {
   }
   return(weighted.mean(accuracy, num_sample))
 }
-
-random_forest <- cross_validation(db, "rf")
-cross_validation(db, "svmLinear3")
-
-
-rpart = cv(db,method = "rpart")
-## Il risultato medio è 61.34793%, contro un 73.92431% ottenuto con doppia stratificazione.
-
-rf = cv(db,method = "rf")
-## Il risultato medio è 72.92627%, contro un 84.82806% ottenuto con doppia stratificazione.
-c05 = cv(db,method = "C5.0")
-## Il risultato medio è 72.90707%, contro un 84.74166% ottenuto con doppia stratificazione.
-svm = cv(db,method = "svmLinear3")
-## Il risultato medio è 73.00307%, contro un 84.41334% ottenuto con doppia stratificazione.
-lb = cv(db,method = "LogitBoost")
-## Il risultato medio è 76.94287%, contro un 86.11929% ottenuto con doppia stratificazione,
-## miglior risultato.
-
-                 
-## Analisi della Confusion Matrix del modello "Logitistic Boost"
-
-cm <- data.frame(confusionMatrix.train(model.lb,norm = "none")[['table']])
-cm_lb <- cm[cm$Prediction!=cm$Reference,]
-cm_lb <- cm_lb[order(-cm_lb$Freq),]
-View(cm_lb)
-
-## 1) Conta le volte in cui news e law & politics sono state scambiate
-err1 <- cm_lb[(cm_lb$Prediction=='news' & cm_lb$Reference=='law & politics'),'Freq']+
-             cm_lb[(cm_lb$Prediction=='law & politics' & cm_lb$Reference=='news'),'Freq']
-##In 1014 casi, il modello ha scambiato le due categorie.
-
-## 2) Conta le volte in cui crime e news sono state scambiate
-err3 <- cm_lb[(cm_lb$Prediction=='crime' & cm_lb$Reference=='news'),'Freq']+
-  cm_lb[(cm_lb$Prediction=='news' & cm_lb$Reference=='crime'),'Freq']
-##In 14 casi, il modello ha scambiato le due categorie.
-
-## 4) Conta le volte in cui food e health & lifestyle sono state scambiate
-err4 <- cm_lb[(cm_lb$Prediction=='food' & cm_lb$Reference=='health & lifestyle'),'Freq']+
-  cm_lb[(cm_lb$Prediction=='health & lifestyle' & cm_lb$Reference=='food'),'Freq']
-##In 11 casi, il modello ha scambiato le due categorie.
-
-## 5) Conta le volte in cui law & politics e economy, business & jobs sono state scambiate
-err5 <- cm_lb[(cm_lb$Prediction=='economy, business & jobs' & cm_lb$Reference=='law & politics'),'Freq']+
-  cm_lb[(cm_lb$Prediction=='law & politics' & cm_lb$Reference=='economy, business & jobs'),'Freq']
-##In 4 casi, il modello ha scambiato le due categorie.
-
-#Calcola il numero di errori di minor gravità:
-err <- (err1+err3+err4+err5)
-err_perc <- err/sum(cm$Freq)
-## C'è un 3% di errori che potrebbero non essere considerati come tali,
-## poichè anche all'occhio umano sarebbe difficile distinguere perfettamente le due categorie.
-tot <- sum(cm$Freq)-err
-true_accuracy <- sum(cm[cm$Prediction==cm$Reference,'Freq'])/tot
-## Depurando l'accuratezza da questi errori, si ottiene un'accuratezza del 91.41277%.
-
-## Analisi della Confusion Matrix del modello "SVM"
-
-cm <- data.frame(confusionMatrix.train(model.svm,norm = "none")[['table']])
-cm_svm <- cm[cm$Prediction!=cm$Reference,]
-cm_svm <- cm_svm[order(-cm_svm$Freq),]
-View(cm_svm)
-
-## 1) Conta le volte in cui news e law & politics sono state scambiate
-err1 <- cm_svm[(cm_lb$Prediction=='news' & cm_svm$Reference=='law & politics'),'Freq']+
-  cm_svm[(cm_svm$Prediction=='law & politics' & cm_svm$Reference=='news'),'Freq']
-##In 1384 casi, il modello ha scambiato le due categorie.
-
-## 2) Conta le volte in cui crime e news sono state scambiate
-err3 <- cm_svm[(cm_svm$Prediction=='crime' & cm_svm$Reference=='news'),'Freq']+
-  cm_svm[(cm_svm$Prediction=='news' & cm_svm$Reference=='crime'),'Freq']
-##In 18 casi, il modello ha scambiato le due categorie.
-
-## 4) Conta le volte in cui food e health & lifestyle sono state scambiate
-err4 <- cm_svm[(cm_svm$Prediction=='food' & cm_svm$Reference=='health & lifestyle'),'Freq']+
-  cm_svm[(cm_svm$Prediction=='health & lifestyle' & cm_svm$Reference=='food'),'Freq']
-##In 15 casi, il modello ha scambiato le due categorie.
-
-## 5) Conta le volte in cui law & politics e economy, business & jobs sono state scambiate
-err5 <- cm_svm[(cm_svm$Prediction=='economy, business & jobs' & cm_svm$Reference=='law & politics'),'Freq']+
-  cm_svm[(cm_svm$Prediction=='law & politics' & cm_svm$Reference=='economy, business & jobs'),'Freq']
-##In 26 casi, il modello ha scambiato le due categorie.
-
-err <- (err1+err3+err4+err5)
-err_perc <- err/sum(cm$Freq)
-## C'è un 4% di errori che potrebbero non essere considerati come tali,
-## poichè anche all'occhio umano sarebbe difficile distinguere perfettamente le due categorie.
-tot <- sum(cm$Freq)-err
-true_accuracy <- sum(cm[cm$Prediction==cm$Reference,'Freq'])/tot
-## Depurando l'accuratezza da questi errori, si ottiene un'accuratezza del 92.435%.
-  
+         
 save.image(file = "/Users/riccardocervero/Desktop/completed.RData")
